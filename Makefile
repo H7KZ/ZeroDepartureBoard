@@ -1,6 +1,6 @@
 PI_HOST = pi@raspberrypi.local
-TARGET = aarch64-unknown-linux-gnu
-BIN = PiZero2
+TARGET  = aarch64-unknown-linux-gnu
+BIN     = departure-board
 
 .PHONY: build deploy ship check run
 

@@ -1,17 +1,13 @@
-# PiZero2 Security System
+# ZeroDepartureBoard
 
-Rust-based security monitor for Raspberry Pi Zero 2 WH. Subscribes to ONVIF events from a Tapo camera, grabs RTSP frames on motion/person detection, runs face recognition via Python sidecar, and sends Telegram notifications. Status shown on SH1106 OLED display via I2C.
-
-## Architecture
+Public transport departure board on Raspberry Pi Zero 2 WH. PIR motion sensor wakes a 128×64 OLED, which shows upcoming departures fetched from a backend API.
 
 ```
-Tapo camera
-    │  ONVIF pull-point (SOAP/HTTP)
-    ▼
-main.rs  ──→  onvif.rs   (subscribe + pull events)
-         ──→  camera.rs  (ffmpeg RTSP grab → face_recognizer.py)
-         ──→  telegram.rs (send notification)
-         ──→  display.rs  (SH1106 OLED over I2C)
+PIR sensor ──[motion]──► fetch /departures ──► SH1106 OLED
+                              │
+                     backend (separate repo)
+                              │
+                         Golemio PID API
 ```
 
 ## Hardware
@@ -19,166 +15,168 @@ main.rs  ──→  onvif.rs   (subscribe + pull events)
 | Component | Notes |
 |-----------|-------|
 | Raspberry Pi Zero 2 WH | target board |
-| SH1106 128×64 OLED | I2C, wired to `/dev/i2c-1` |
-| Tapo camera (C200/C210/etc.) | ONVIF + RTSP enabled |
+| SH1106 128×64 OLED | I2C on `/dev/i2c-1` |
+| PIR motion sensor | GPIO, BCM numbering |
 
 **OLED wiring (I2C):**
 
-| OLED pin | Pi Zero pin |
-|----------|-------------|
+| OLED pin | Pi pin |
+|----------|--------|
 | VCC | 3.3V (pin 1) |
 | GND | GND (pin 6) |
 | SCL | GPIO 3 / SCL (pin 5) |
 | SDA | GPIO 2 / SDA (pin 3) |
 
+**PIR wiring:** VCC → 5V, GND → GND, OUT → configured `PIR_GPIO_PIN` (BCM).
+
+## Display layout
+
+```
+┌─────────────────────┐
+│Bořislavka      12:34│  ← stop name + local clock
+│22   Bílá Hora    2m │  ← line · destination · minutes
+│119  Prosek       5m │
+│147  Letiště     12m │
+│A    Dep.Hostivař 18m│
+└─────────────────────┘
+```
+
+FONT_6X10, 21 chars × 5 rows. `NOW ` shown for departures ≤0 min. `>99m` for >99 min.
+
+## Configuration
+
+All config is baked into the binary at compile time. Copy the example and fill in your values:
+
+```sh
+cp .env.example .env
+$EDITOR .env
+```
+
+| Key | Description |
+|-----|-------------|
+| `BACKEND_URL` | Base URL of the backend server |
+| `BACKEND_API_KEY` | Bearer token (leave empty if no auth) |
+| `BACKEND_TIMEOUT_SECS` | HTTP timeout in seconds |
+| `PIR_GPIO_PIN` | BCM GPIO pin number for PIR sensor |
+| `IDLE_TIMEOUT_SECS` | Seconds of no motion before display sleeps |
+| `POLL_INTERVAL_SECS` | How often to re-fetch while display is active |
+| `STOP_NAME` | Fallback stop name if backend omits `stop_name` |
+| `MAX_DEPARTURES` | Max rows on display (4 fits with header) |
+
+`.env` is gitignored. `.env.example` is the committed template.
+
+## Backend API contract
+
+Device calls one endpoint. Backend (separate repo) handles Golemio auth and stop config.
+
+```
+GET /departures
+Authorization: Bearer <BACKEND_API_KEY>   (omitted if key is empty)
+
+200 OK:
+{
+  "stop_name": "Bořislavka",       // optional — falls back to STOP_NAME
+  "fetched_at": "2026-04-20T12:34:56Z",
+  "departures": [
+    {
+      "line":        "22",
+      "destination": "Bílá Hora",
+      "minutes":     2              // minutes until departure; ≤0 = departing now
+    }
+  ]
+}
+
+503 Service Unavailable:
+{
+  "error":   "upstream_unavailable",
+  "message": "Cannot reach Golemio API"
+}
+```
+
 ## Prerequisites
 
-### On your build machine (Linux/macOS/WSL)
+### Build machine (Linux / macOS / WSL)
 
-1. **Rust toolchain**
-   ```sh
-   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-   source $HOME/.cargo/env
-   ```
+```sh
+# Rust toolchain
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-2. **cross** – cross-compilation tool (builds `aarch64` binary on x86)
-   ```sh
-   cargo install cross
-   ```
-   `cross` requires Docker or Podman. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) or:
-   ```sh
-   # Ubuntu/Debian/WSL
-   sudo apt install docker.io
-   sudo usermod -aG docker $USER   # then log out and back in
-   ```
+# cross — cross-compilation wrapper (requires Docker or Podman)
+cargo install cross
 
-3. **`aarch64-unknown-linux-gnu` target** (only needed for native cross without `cross` tool)
-   ```sh
-   rustup target add aarch64-unknown-linux-gnu
-   ```
+# Docker (Ubuntu/WSL)
+sudo apt install docker.io
+sudo usermod -aG docker $USER   # log out and back in
+```
 
-### On the Raspberry Pi Zero 2 WH
+### Raspberry Pi
 
 ```sh
 sudo apt update && sudo apt upgrade -y
 
 # Enable I2C
 sudo raspi-config
-# → Interface Options → I2C → Enable → Finish → reboot
-
-# Runtime dependencies
-sudo apt install -y ffmpeg python3 python3-pip
-
-# Face recognition dependencies
-pip3 install opencv-python-headless face_recognition numpy
+# → Interface Options → I2C → Enable → reboot
 ```
 
-## Configuration
-
-Edit constants at the top of [`src/main.rs`](src/main.rs):
-
-```rust
-const CAM_IP:    &str = "192.168.1.100";       // camera IP on your LAN
-const CAM_USER:  &str = "admin";               // Tapo app username
-const CAM_PASS:  &str = "YOUR_TAPO_PASSWORD";  // Tapo app password (not RTSP)
-const RTSP_URL:  &str = "rtsp://admin:YOUR_RTSP_PASSWORD@192.168.1.100:554/stream2";
-
-const BOT_TOKEN: &str = "YOUR_BOT_TOKEN";      // from @BotFather
-const CHAT_ID:   &str = "YOUR_CHAT_ID";        // your Telegram chat/user ID
-```
-
-### Create a Telegram bot
-
-1. Message [@BotFather](https://t.me/BotFather) → `/newbot`
-2. Copy the token → `BOT_TOKEN`
-3. Message [@userinfobot](https://t.me/userinfobot) → copy the id → `CHAT_ID`
-
-### Find your RTSP password
-
-In the Tapo app: **Camera settings → Advanced → RTSP**. Enable it and note the password (it is separate from your Tapo account password).
-
-## Face recognizer
-
-The binary calls `python3 /home/pi/face_recognizer.py recognize <image>` and expects JSON on stdout:
-
-```json
-{"faces": [{"name": "Honza", "confidence": 42.1}], "count": 1}
-```
-
-`face_recognizer.py` must support two subcommands:
-- `train` – build model from labeled images
-- `recognize <path>` – print JSON to stdout
-
-Place labeled training images in `/home/pi/faces/<name>/` then run:
-
-```sh
-python3 /home/pi/face_recognizer.py train
-```
-
-Script path is configurable via `RECOGNIZER_PATH` in `main.rs`.
+No runtime dependencies beyond the binary itself.
 
 ## Build
 
-### Cross-compile for Pi Zero 2 (recommended)
+```sh
+# cross-compile for Pi Zero 2
+make build
 
+# lint + format check
+make check
+```
+
+Output: `target/aarch64-unknown-linux-gnu/release/departure-board`
+
+## Deploy & run
+
+```sh
+make ship      # build + scp to Pi
+make run       # ssh and execute on Pi
+```
+
+Or separately:
 ```sh
 make build
-# equivalent: cross build --target aarch64-unknown-linux-gnu --release
-```
-
-Output: `target/aarch64-unknown-linux-gnu/release/PiZero2`
-
-### Native build on Pi (slow, not recommended)
-
-```sh
-cargo build --release
-```
-
-### Lint & format check
-
-```sh
-make check
-# equivalent: cargo clippy && cargo fmt --check
-```
-
-## Deploy & Run
-
-**Copy binary to Pi:**
-```sh
 make deploy
-# equivalent: scp target/aarch64-unknown-linux-gnu/release/PiZero2 pi@raspberrypi.local:~/
 ```
 
-**Build + deploy in one step:**
+If `raspberrypi.local` doesn't resolve, set `PI_HOST` in `Makefile` to the Pi's IP.
+
+SSH key setup (avoids password prompts):
 ```sh
-make ship
+ssh-copy-id pi@raspberrypi.local
 ```
 
-**Run on Pi via SSH:**
-```sh
-make run
-# equivalent: ssh pi@raspberrypi.local "./PiZero2"
-```
+## Makefile targets
 
-**Run directly on Pi:**
-```sh
-./PiZero2
-```
+| Target | Action |
+|--------|--------|
+| `make build` | Cross-compile release binary |
+| `make deploy` | `scp` binary to Pi |
+| `make ship` | build + deploy |
+| `make run` | `ssh` and run on Pi |
+| `make check` | clippy + fmt check |
 
-### Run as systemd service (auto-start on boot)
+## Systemd service (auto-start on boot)
 
 ```sh
-sudo nano /etc/systemd/system/pizero2.service
+sudo nano /etc/systemd/system/departure-board.service
 ```
 
 ```ini
 [Unit]
-Description=PiZero2 Security System
+Description=ZeroDepartureBoard
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/home/pi/PiZero2
+ExecStart=/home/pi/departure-board
 WorkingDirectory=/home/pi
 Restart=on-failure
 RestartSec=5
@@ -190,42 +188,21 @@ WantedBy=multi-user.target
 
 ```sh
 sudo systemctl daemon-reload
-sudo systemctl enable pizero2
-sudo systemctl start pizero2
-sudo journalctl -fu pizero2   # follow logs
+sudo systemctl enable departure-board
+sudo systemctl start departure-board
+sudo journalctl -fu departure-board
 ```
-
-## SSH setup (for make deploy/run)
-
-If `pi@raspberrypi.local` doesn't resolve, either edit `PI_HOST` in `Makefile` to use the IP directly, or set up SSH key auth to avoid password prompts:
-
-```sh
-ssh-copy-id pi@raspberrypi.local
-```
-
-## Makefile targets
-
-| Target | Action |
-|--------|--------|
-| `make build` | Cross-compile release binary |
-| `make deploy` | scp binary to Pi |
-| `make ship` | build + deploy |
-| `make run` | ssh and run binary on Pi |
-| `make check` | clippy + fmt check |
 
 ## Troubleshooting
 
-**`Nelze otevřít I2C sběrnici (/dev/i2c-1)`**
-I2C not enabled. Run `sudo raspi-config` → Interface Options → I2C → Enable, reboot.
+**`Cannot open /dev/i2c-1`**
+I2C not enabled. `sudo raspi-config` → Interface Options → I2C → Enable → reboot.
 
-**ONVIF subscribe fails / no events**
-Enable ONVIF in Tapo app: Advanced → ONVIF. Verify camera IP and credentials.
-ONVIF topic strings vary by firmware — run `GetEventProperties` to discover exact topics for your camera.
+**Display stays blank after motion**
+Check PIR wiring and `PIR_GPIO_PIN` value. Verify with `gpio readall` (BCM column).
 
-**ffmpeg timeout / camera unavailable**
-Telegram notification still sent (without image). Verify RTSP URL and password.
-Use `stream2` (sub-stream, 360p) not `stream1` — significantly faster grab on Pi Zero.
+**`[API] Error: …`**
+Backend unreachable. Display shows "Chyba spojeni" and retries every `POLL_INTERVAL_SECS`. Check `BACKEND_URL` and network connectivity.
 
-**Face recognition slow (~2–3s first call)**
-Expected on Pi Zero 2. Python + OpenCV import overhead on each call.
-For production: convert to a long-running Python daemon communicating via stdin/stdout or Unix socket.
+**Czech characters not rendering**
+Display uses `embedded_graphics::mono_font::iso_8859_2::FONT_6X10` which covers full Czech alphabet. If characters appear as blocks, verify the embedded-graphics version supports iso_8859_2 (requires 0.8+).

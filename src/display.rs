@@ -1,5 +1,5 @@
 use embedded_graphics::{
-    mono_font::{ascii::FONT_6X10, MonoTextStyleBuilder},
+    mono_font::{iso_8859_2::FONT_6X10, MonoTextStyle, MonoTextStyleBuilder},
     pixelcolor::BinaryColor,
     prelude::*,
     text::{Baseline, Text},
@@ -9,56 +9,47 @@ use sh1106::{mode::GraphicsMode, Builder};
 
 pub type Display = GraphicsMode<sh1106::interface::I2cInterface<I2cdev>>;
 
-/// Inicializuje SH1106 OLED přes I2C sběrnici (/dev/i2c-1).
-///
-/// Zapni I2C na Pi:
-///   `sudo raspi-config` → Interface Options → I2C → Enable
 pub fn init() -> Display {
-    let i2c = I2cdev::new("/dev/i2c-1").expect("Nelze otevřít I2C sběrnici (/dev/i2c-1)");
-
+    let i2c = I2cdev::new("/dev/i2c-1").expect("Cannot open /dev/i2c-1 — enable I2C via raspi-config");
     let mut display: Display = Builder::new().connect_i2c(i2c).into();
-
-    display.init().expect("Display init selhal");
-    display.flush().expect("Display flush selhal");
-
+    display.init().expect("Display init failed");
+    display.flush().expect("Display flush failed");
     display
 }
 
-/// Vymaže displej a zobrazí text od levého horního rohu.
-///
-/// Dlouhé texty se zalomí automaticky (embedded-graphics to neřeší, takže
-/// pokud potřebuješ více řádků, použij `show_lines`).
-pub fn show_text(display: &mut Display, text: &str) {
+/// Blanks the screen (OLED draws no current for dark pixels).
+pub fn sleep(display: &mut Display) {
     display.clear();
-
-    let style = MonoTextStyleBuilder::new()
-        .font(&FONT_6X10)
-        .text_color(BinaryColor::On)
-        .build();
-
-    Text::with_baseline(text, Point::new(0, 0), style, Baseline::Top)
-        .draw(display)
-        .expect("Draw selhal");
-
-    display.flush().expect("Flush selhal");
+    display.flush().expect("Flush failed");
 }
 
-/// Zobrazí více řádků textu (každý řádek = 12px výška s FONT_6X10).
-#[allow(dead_code)]
-pub fn show_lines(display: &mut Display, lines: &[&str]) {
+/// Renders header + departure rows. Each string must be ≤21 chars (caller's responsibility).
+pub fn render_board(display: &mut Display, header: &str, rows: &[String]) {
     display.clear();
+    let s = style();
+    put(display, s, header, 0);
+    for (i, row) in rows.iter().enumerate() {
+        put(display, s, row, (i as i32 + 1) * 12);
+    }
+    display.flush().expect("Flush failed");
+}
 
-    let style = MonoTextStyleBuilder::new()
+/// Single status line (startup, error, idle hint).
+pub fn show_status(display: &mut Display, msg: &str) {
+    display.clear();
+    put(display, style(), msg, 0);
+    display.flush().expect("Flush failed");
+}
+
+fn style() -> MonoTextStyle<'static, BinaryColor> {
+    MonoTextStyleBuilder::new()
         .font(&FONT_6X10)
         .text_color(BinaryColor::On)
-        .build();
+        .build()
+}
 
-    for (i, line) in lines.iter().enumerate() {
-        let y = i as i32 * 12; // řádková výška: font 10px + 2px mezera
-        Text::with_baseline(line, Point::new(0, y), style, Baseline::Top)
-            .draw(display)
-            .expect("Draw selhal");
-    }
-
-    display.flush().expect("Flush selhal");
+fn put(display: &mut Display, style: MonoTextStyle<'static, BinaryColor>, text: &str, y: i32) {
+    Text::with_baseline(text, Point::new(0, y), style, Baseline::Top)
+        .draw(display)
+        .expect("Draw failed");
 }
