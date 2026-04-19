@@ -5,7 +5,12 @@ use crate::config;
 
 #[derive(Deserialize, Debug)]
 pub struct DeparturesResponse {
-    pub stop_name: Option<String>,
+    pub stops: Vec<Stop>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct Stop {
+    pub stop_name: String,
     pub departures: Vec<Departure>,
 }
 

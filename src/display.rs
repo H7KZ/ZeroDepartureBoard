@@ -10,7 +10,8 @@ use sh1106::{mode::GraphicsMode, Builder};
 pub type Display = GraphicsMode<sh1106::interface::I2cInterface<I2cdev>>;
 
 pub fn init() -> Display {
-    let i2c = I2cdev::new("/dev/i2c-1").expect("Cannot open /dev/i2c-1 — enable I2C via raspi-config");
+    let i2c =
+        I2cdev::new("/dev/i2c-1").expect("Cannot open /dev/i2c-1 — enable I2C via raspi-config");
     let mut display: Display = Builder::new().connect_i2c(i2c).into();
     display.init().expect("Display init failed");
     display.flush().expect("Display flush failed");

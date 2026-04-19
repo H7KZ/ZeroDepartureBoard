@@ -21,3 +21,23 @@ pub const POLL_INTERVAL_SECS: u64 = parse_u64(env!("POLL_INTERVAL_SECS"));
 
 pub const STOP_NAME: &str = env!("STOP_NAME");
 pub const MAX_DEPARTURES: usize = parse_u64(env!("MAX_DEPARTURES")) as usize;
+
+/// BCM pin for stop-cycle button. None = no button.
+pub const BUTTON_GPIO_PIN: Option<u8> = {
+    let v = parse_u64(env!("BUTTON_GPIO_PIN"));
+    if v == 0 {
+        None
+    } else {
+        Some(v as u8)
+    }
+};
+
+/// BCM pin for active-state LED. None = no LED.
+pub const LED_GPIO_PIN: Option<u8> = {
+    let v = parse_u64(env!("LED_GPIO_PIN"));
+    if v == 0 {
+        None
+    } else {
+        Some(v as u8)
+    }
+};

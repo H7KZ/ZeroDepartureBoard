@@ -12,12 +12,19 @@ use chrono::Local;
 
 use crate::api::Departure;
 
-/// Header row: stop name (left) + local clock HH:MM (right). Always 21 chars.
-pub fn header(stop_name: &str) -> String {
-    let time = Local::now().format("%H:%M").to_string(); // 5 chars
-    let name_width = 21 - 1 - time.len();               // 15
+/// Header row: stop name (left) + clock or stop indicator (right). Always 21 chars.
+///
+/// Single stop:   "Bořislavka      12:34"
+/// Multi-stop:    "Bořislavka       1/2 "  (index shown instead of clock)
+pub fn header(stop_name: &str, index: usize, total: usize) -> String {
+    let right = if total > 1 {
+        format!("{}/{}", index + 1, total) // e.g. "1/2"
+    } else {
+        Local::now().format("%H:%M").to_string()
+    };
+    let name_width = 21 - 1 - right.len();
     let name: String = stop_name.chars().take(name_width).collect();
-    format!("{:<width$} {}", name, time, width = name_width)
+    format!("{:<width$} {}", name, right, width = name_width)
 }
 
 /// Renders up to `max` departure rows, each exactly 21 chars.
@@ -45,6 +52,19 @@ fn fmt_time(minutes: i32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn header_single_stop() {
+        let h = header("Bořislavka", 0, 1);
+        assert_eq!(h.chars().count(), 21, "header: {:?}", h);
+    }
+
+    #[test]
+    fn header_multi_stop() {
+        let h = header("Bořislavka", 0, 2);
+        assert_eq!(h.chars().count(), 21, "header: {:?}", h);
+        assert!(h.ends_with("1/2"), "header: {:?}", h);
+    }
 
     #[test]
     fn row_length() {
